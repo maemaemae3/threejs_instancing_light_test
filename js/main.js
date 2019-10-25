@@ -13,6 +13,9 @@ const lam_vert = [
     "#include <lights_pars_begin>",
     "#include <fog_pars_vertex>",
     "#include <shadowmap_pars_vertex>",
+    "attribute vec2 vUvOffsets;",
+    "varying vec2 v_vUvOffsets;",
+    "uniform float vUvScale;",
     "varying vec2 vUv;",
     "",
     "void main() {",
@@ -34,6 +37,7 @@ const lam_vert = [
     "    #include <lights_lambert_vertex>",
     "    #include <shadowmap_vertex>",
     "    #include <fog_vertex>",
+    "    v_vUvOffsets = vUvOffsets;",
     "}"
     ].join("\n");
 
@@ -57,6 +61,8 @@ const lam_frag = [
     "#include <shadowmask_pars_fragment>",
     "#include <specularmap_pars_fragment>",
     "uniform sampler2D map;",
+    "uniform float vUvScale;",
+    "varying vec2 v_vUvOffsets;",
     "varying vec2 vUv;",
     "",
     "void main() {",
@@ -67,7 +73,7 @@ const lam_frag = [
     "	ReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );",
     "	vec3 totalEmissiveRadiance = emissive;",
     "",
-    "   vec4 texelColor = texture2D( map, vUv );",
+    "   vec4 texelColor = texture2D( map, (vUv * vUvScale) + (v_vUvOffsets * vUvScale) );",
     "",
     "   texelColor = mapTexelToLinear( texelColor );",
     "   diffuseColor *= texelColor;",
@@ -91,7 +97,7 @@ const lam_frag = [
     "	#include <fog_fragment>",
     "",
     "}"
-    ].join("\n");
+].join("\n");
 
 const scene    = new THREE.Scene();
 const camera   = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 100000);
@@ -100,19 +106,14 @@ const controls = new THREE.OrbitControls(camera, renderer.domElement);
 const loader   = new THREE.GLTFLoader();
 
 const instances = 20;
+const tex_vec      = new THREE.InstancedBufferAttribute(new Float32Array(instances * 2), 2, false);
 const scales       = new THREE.InstancedBufferAttribute(new Float32Array(instances * 3), 3, false);
 const translations = new THREE.InstancedBufferAttribute(new Float32Array(instances * 3), 3, false);
 const orientations = new THREE.InstancedBufferAttribute(new Float32Array(instances * 4), 4, false).setDynamic(true);
 let box, single_box;
+let loaded = false;
 
-function onResize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
-}
-
+const castle_tex_vec = {"0": [0, 3], "1": [1, 3], "2": [2, 3], "3": [3, 3], "4": [0, 2], "5": [1, 2], "6": [2, 2], "7": [3, 2]};
 function object() {
     function makeObjects(igeo, mat) {
         const material = new THREE.ShaderMaterial({
@@ -127,13 +128,20 @@ function object() {
                 THREE.UniformsLib.emissivemap,
                 THREE.UniformsLib.fog,
                 THREE.UniformsLib.lights,
-                { map: { type: 't', value: null } }
+                {
+                    map: { type: 't', value: null },
+                    vUvScale: { value: 1 / 4 }
+                }
             ]),
             lights: true
         });
-        material.uniforms.map.value = mat.map;
+        material.uniforms.map.value = new THREE.TextureLoader().load('./models/boxSprite.png');
 
         for (var i = 0; i < instances; i++) {
+            // texture
+            const k = i % 8;
+            tex_vec.setXY(i, castle_tex_vec[k][0], castle_tex_vec[k][1]);
+
             // translations
             const position = new THREE.Vector3();
             position.x = Math.random() * 2000;
@@ -155,18 +163,18 @@ function object() {
             scales.setXYZ(i, scale, scale, scale);
         }
 
+        igeo.addAttribute('vUvOffsets', tex_vec);
         igeo.addAttribute('scale', scales);
         igeo.addAttribute('translation', translations);
         igeo.addAttribute('orientation', orientations);
 
         const mesh = new THREE.Mesh(igeo, material);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
         mesh.frustumCulled = false;
+        mesh.material.needsUpdate = true;
         scene.add(mesh);
     }
 
-    loader.load("./models/b.glb", function (gltf) {
+    loader.load("https://rawcdn.githack.com/maemaemae3/threejs_instancing_light_test/a5b7ee2ddf5fbda619f707841d7d68e9cff7380f/models/b.glb", function (gltf) {
 
         let igeo;
         let material;
@@ -179,53 +187,6 @@ function object() {
 
         makeObjects(igeo, material);
     });
-}
-
-window.onload = function () {
-    camera.position.x = 0;
-    camera.position.y = 5000;
-    camera.position.z = 5000;
-    
-    camera.lookAt(new THREE.Vector3(0, 0, 0));
-    controls.target = new THREE.Vector3(0, 0, 0);
-
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.gammaOutput = true;
-    renderer.setClearColor(0x666666, 1.0);
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    document.body.appendChild(renderer.domElement);
-
-    window.addEventListener('resize', onResize);
-    onResize();
-
-    //ground plane
-    const grid = new THREE.GridHelper(5000, 100);
-    scene.add(grid);
-
-    const ambientLight = new THREE.AmbientLight(0xFFFFFF);
-    const intensity = 1.0;
-    ambientLight.color.setRGB(
-        ambientLight.color.r * intensity,
-        ambientLight.color.g * intensity,
-        ambientLight.color.b * intensity);
-    scene.add(ambientLight);
-
-    const dirLight = new THREE.DirectionalLight(0xFFFFFF, 0.5);
-    dirLight.castShadow = true;
-    dirLight.position.set(500, 300, 500);
-    dirLight.shadow.darkness      =  0.2;
-    dirLight.shadow.camera.near   =  1;
-    dirLight.shadow.camera.far    =  1000;
-    dirLight.shadow.camera.right  =  500;
-    dirLight.shadow.camera.left   = -500;
-    dirLight.shadow.camera.top    =  500;
-    dirLight.shadow.camera.bottom = -500;
-    dirLight.shadow.camera.near   =  0.5;
-    scene.add(dirLight);
-    const light_helper = new THREE.CameraHelper(dirLight.shadow.camera);
-    scene.add(light_helper);
 
     const geometry = new THREE.BoxBufferGeometry(200, 200, 200);
     const material = new THREE.MeshLambertMaterial({color: 0x6699FF});
@@ -234,16 +195,63 @@ window.onload = function () {
     scene.add(box);
     
 
-    loader.load("./models/b.glb", function (gltf) {
+    loader.load("https://rawcdn.githack.com/maemaemae3/threejs_instancing_light_test/a5b7ee2ddf5fbda619f707841d7d68e9cff7380f/models/b.glb", function (gltf) {
         single_box = gltf.scene;
         single_box.position.set(500, 0, -500);
         single_box.scale.set(100, 100, 100);
         scene.add(single_box);
-    });
 
-    object();
-    update();
-};
+        loaded = true;
+    });
+}
+
+camera.position.x = 0;
+camera.position.y = 5000;
+camera.position.z = 5000;
+
+camera.lookAt(new THREE.Vector3(0, 0, 0));
+controls.target = new THREE.Vector3(0, 0, 0);
+
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.gammaOutput = true;
+renderer.setClearColor(0x666666, 1.0);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+window.addEventListener('resize', onResize);
+onResize();
+
+//ground plane
+const grid = new THREE.GridHelper(5000, 100);
+scene.add(grid);
+
+const ambientLight = new THREE.AmbientLight(0xFFFFFF);
+const intensity = 1.0;
+ambientLight.color.setRGB(
+  ambientLight.color.r * intensity,
+  ambientLight.color.g * intensity,
+  ambientLight.color.b * intensity);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xFFFFFF, 0.5);
+dirLight.castShadow = true;
+dirLight.position.set(500, 300, 500);
+dirLight.shadow.darkness      =  0.2;
+dirLight.shadow.camera.near   =  1;
+dirLight.shadow.camera.far    =  1000;
+dirLight.shadow.camera.right  =  500;
+dirLight.shadow.camera.left   = -500;
+dirLight.shadow.camera.top    =  500;
+dirLight.shadow.camera.bottom = -500;
+dirLight.shadow.camera.near   =  0.5;
+scene.add(dirLight);
+const light_helper = new THREE.CameraHelper(dirLight.shadow.camera);
+scene.add(light_helper);
+
+object();
+update();
 
 function createRotQuarternion(xx, yy, zz, deg) {
     const factor = Math.sin(deg / 2.0);
@@ -262,6 +270,8 @@ function createRotQuarternion(xx, yy, zz, deg) {
 function update() {
     requestAnimationFrame(update);
 
+    if (!loaded) return;
+
     box.rotation.y += 0.02;
     single_box.rotation.y += 0.02;
     
@@ -278,4 +288,12 @@ function update() {
     orientations.needsUpdate = true;
 
     renderer.render(scene, camera);
+}
+
+function onResize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
 }
